@@ -1,0 +1,22 @@
+name = "shotsync"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "shotsync"
+
+# Inject AUTH_TOKEN via: wrangler secret put AUTH_TOKEN — do not hardcode here
+
+# Public read-only demo pool: deploy with `wrangler deploy --env demo`.
+# Needs its own bucket + token: see scripts/deploy-demo.sh.
+[env.demo]
+name = "shotsync-demo"
+
+[env.demo.vars]
+DEMO_MODE = "1"
+
+[[env.demo.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "shotsync-demo"
