@@ -121,17 +121,21 @@ npm run deploy
    npx wrangler r2 bucket cors set shotsync --file cors.json
    ```
 
-   `cors.json` 内容：
+   `cors.json` 内容（注意是 Cloudflare API 格式的小写 `allowed`，不是 S3 风格的 PascalCase）：
 
    ```json
-   [
-     {
-       "AllowedOrigins": ["https://shotsync.<你的子域>.workers.dev"],
-       "AllowedMethods": ["PUT"],
-       "AllowedHeaders": [],
-       "MaxAgeSeconds": 3600
-     }
-   ]
+   {
+     "rules": [
+       {
+         "allowed": {
+           "origins": ["https://shotsync.<你的子域>.workers.dev"],
+           "methods": ["PUT"],
+           "headers": []
+         },
+         "maxAgeSeconds": 3600
+       }
+     ]
+   }
    ```
 
    把 origin 换成你的真实 Worker 地址（不要用 `*`——上传本身由签名 URL 鉴权，但 origin 仍应限定为你自己的域名）。改完 `wrangler.toml` 后重新 `npm run deploy`。

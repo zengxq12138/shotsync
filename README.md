@@ -124,14 +124,18 @@ By default the app is transit-only. To enable the archive pool (permanent storag
    with `cors.json`:
 
    ```json
-   [
-     {
-       "AllowedOrigins": ["https://shotsync.<your-subdomain>.workers.dev"],
-       "AllowedMethods": ["PUT"],
-       "AllowedHeaders": [],
-       "MaxAgeSeconds": 3600
-     }
-   ]
+   {
+     "rules": [
+       {
+         "allowed": {
+           "origins": ["https://shotsync.<your-subdomain>.workers.dev"],
+           "methods": ["PUT"],
+           "headers": []
+         },
+         "maxAgeSeconds": 3600
+       }
+     ]
+   }
    ```
 
    Replace the origin with your real Worker URL (no `*` — uploads are authenticated by the signed URL only, but the origin should still be yours). Re-run `npm run deploy` after editing `wrangler.toml`.

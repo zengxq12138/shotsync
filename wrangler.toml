@@ -3,6 +3,11 @@ main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+# R2 S3 endpoint (bucket path included) — used by the archive pool's
+# presigned PUT / server-side copy; credentials come from `wrangler secret put`
+[vars]
+R2_S3_ENDPOINT = "https://a88c2595dbb442f8d5dd427782709ce2.r2.cloudflarestorage.com/shotsync"
+
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "shotsync"
@@ -16,6 +21,9 @@ name = "shotsync-demo"
 
 [env.demo.vars]
 DEMO_MODE = "1"
+R2_S3_ENDPOINT = "https://a88c2595dbb442f8d5dd427782709ce2.r2.cloudflarestorage.com"
+
+
 
 [[env.demo.r2_buckets]]
 binding = "BUCKET"
