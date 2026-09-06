@@ -42,6 +42,24 @@ export const galleryHTML = /* html */ `<!doctype html>
                       border: 1px solid #333; background: #1c1c1c; color: #eee; font-size: 15px; }
   #compose .row { display: flex; justify-content: flex-end; gap: 10px; }
   #grid .sel { outline: 3px solid #2b6cff; outline-offset: -3px; opacity: .8; }
+  /* Pool tabs: transit is the app blue, archive gets the amber accent used
+     everywhere archive items appear. */
+  #tabs { display: flex; gap: 4px; }
+  .tab { background: #444; padding: 8px 12px; font-size: 14px; }
+  .tab.on { background: #2b6cff; }
+  .tab#tabArchive.on { background: #c9a227; }
+  /* Usage meter under the header: transit blue + archive amber segments. */
+  #usage { width: 100%; }
+  #usageText { font-size: 12px; color: #aaa; }
+  #usageBar { display: flex; height: 3px; margin-top: 3px; background: #2a2a2a; border-radius: 2px; overflow: hidden; }
+  #usageTransit { background: #2b6cff; height: 100%; }
+  #usageArchive { background: #c9a227; height: 100%; }
+  /* Archive cards carry the same amber so the two pools read apart at a glance. */
+  #grid .arch { outline: 3px solid #c9a227; outline-offset: -3px; }
+  #grid .arch .badge { position: relative; margin-left: auto; color: #c9a227; font-size: 10px;
+                       border: 1px solid #c9a227; border-radius: 4px; padding: 0 4px; align-self: flex-start; }
+  #grid .txtcell.arch .badge { align-self: flex-end; }
+  #promoteBtn { background: #c9a227; }
 </style>
 <!-- Inline so the browser never requests /favicon.ico, which this Worker does
      not serve and which showed up as a 404 on every desktop page load. -->
@@ -57,6 +75,10 @@ export const galleryHTML = /* html */ `<!doctype html>
 
   <header class="hidden" id="bar">
     <h1>shotsync</h1>
+    <div id="tabs">
+      <button class="tab on" id="tabTransit">中转</button>
+      <button class="tab" id="tabArchive">归档</button>
+    </div>
     <input id="imageInput" type="file" accept="image/*" multiple class="hidden">
     <input id="fileInput" type="file" multiple class="hidden">
     <button id="textBtn" style="background:#444">✎ 文字</button>
@@ -65,6 +87,10 @@ export const galleryHTML = /* html */ `<!doctype html>
     <button id="selectBtn" style="background:#444">选择</button>
     <button id="delSelBtn" class="hidden" style="background:#d23">删除选中</button>
     <button id="cancelSelBtn" class="hidden" style="background:#444">取消</button>
+    <div id="usage" style="flex-basis:100%">
+      <span id="usageText">用量加载中…</span>
+      <div id="usageBar"><div id="usageTransit"></div><div id="usageArchive"></div></div>
+    </div>
   </header>
   <main id="grid"></main>
   <div id="toast"></div>
@@ -79,6 +105,7 @@ export const galleryHTML = /* html */ `<!doctype html>
 
   <div id="viewer" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.95);display:flex;flex-direction:column;z-index:10">
     <div style="display:flex;justify-content:flex-end;gap:10px;padding:10px">
+      <button id="promoteBtn" class="hidden">转存归档</button>
       <button id="shareBtn" style="background:#0a8a5f">分享</button>
       <button id="saveBtn" style="background:#2b6cff">保存</button>
       <button id="delBtn" style="background:#d23">删除</button>
@@ -99,6 +126,14 @@ const DEMO_EN = DEMO && !((navigator.language || "").toLowerCase().startsWith("z
 const TOKEN_KEY = "shotsync_token";
 let token = localStorage.getItem(TOKEN_KEY) || "";
 
+// Pool constants mirror src/ids.ts. The transit cap doubles as the routing
+// threshold: anything bigger cannot transit the Worker anyway (its 100 MB
+// request-body ceiling is well above what R2's lifecycle turns over daily).
+const MAX_TRANSIT_BYTES = 50 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 500 * 1024 * 1024;
+const QUOTA_BYTES = 10 * 1024 ** 3;
+const THUMB_MAX_BYTES = 50 * 1024 * 1024; // archive images up to this get a thumbnail
+
 const $ = (s) => document.querySelector(s);
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 function authHeaders() { return { authorization: "Bearer " + token }; }
@@ -115,7 +150,7 @@ $("#tokenSave").onclick = async () => {
   token = $("#tokenInput").value.trim();
   if (!token) return;
   localStorage.setItem(TOKEN_KEY, token);
-  if (await apiOk()) { showApp(); setupUpload(); await initFeed(); }
+  if (await apiOk()) { showApp(); setupUpload(); refreshUsage(true); await initFeed(); }
   else { localStorage.removeItem(TOKEN_KEY); showGate("token 无效"); }
 };
 
@@ -149,6 +184,8 @@ async function openFull(item) {
   txt.textContent = ""; txt.classList.add("hidden");
   file.classList.add("hidden");
   v.classList.remove("hidden");
+  // Only transit items can be promoted; archive items are already permanent.
+  $("#promoteBtn").classList.toggle("hidden", !(item.pool === "transit" && !DEMO));
   currentKind = isText(item) ? "text" : isImage(item) ? "image" : "file";
   if (currentKind === "file") {
     $("#viewerFileName").textContent = item.name || "未命名文件";
@@ -176,6 +213,23 @@ async function openFull(item) {
 }
 
 document.querySelector("#closeBtn").onclick = () => document.querySelector("#viewer").classList.add("hidden");
+
+// Transit → archive: server-side copy, id unchanged, cell hops to the archive
+// tab on its next load.
+document.querySelector("#promoteBtn").onclick = async () => {
+  if (!currentId) return;
+  try {
+    const res = await fetch("/api/promote/" + currentId, { method: "POST", headers: authHeaders() });
+    if (res.status === 503) { toast("此部署未配置归档存储"); return; }
+    if (!res.ok) { toast("转存失败"); return; }
+    const cell = document.querySelector('#grid [data-id="' + currentId + '"]');
+    if (cell) cell.remove();
+    feed().knownIds.delete(currentId);
+    document.querySelector("#viewer").classList.add("hidden");
+    toast("已转存归档");
+    refreshUsage(true);
+  } catch { toast("转存失败"); }
+};
 
 // Mint a public, signed, 7-day link for the current item and copy it to the
 // clipboard. Copy (not the OS share sheet) because the desktop share sheet has
@@ -237,14 +291,22 @@ document.querySelector("#delBtn").onclick = async () => {
   if (res.ok) {
     const cell = document.querySelector('#grid [data-id="' + currentId + '"]');
     if (cell) cell.remove();
-    knownIds.delete(currentId);
+    feed().knownIds.delete(currentId);
     document.querySelector("#viewer").classList.add("hidden");
     toast("已删除");
+    refreshUsage(true);
   } else { toast("删除失败"); }
 };
 
-// Task 10: Gallery feed with lazy thumbnail loading, infinite scroll, and polling
-let cursor = null, loading = false, knownIds = new Set(), pollTimer = null;
+// Task 10: Gallery feed with lazy thumbnail loading, infinite scroll, and polling.
+// Each pool keeps its own cursor + seen-ids so switching tabs never mixes feeds.
+let activePool = "transit";
+const feeds = {
+  transit: { cursor: null, knownIds: new Set() },
+  archive: { cursor: null, knownIds: new Set() },
+};
+const feed = () => feeds[activePool];
+let loading = false, pollTimer = null;
 let contentObserver;
 
 // Multi-select batch delete: tap cells to select, then "delete selected".
@@ -279,16 +341,18 @@ async function deleteSelected() {
         ok++;
         const cell = document.querySelector('#grid [data-id="' + id + '"]');
         if (cell) cell.remove();
-        knownIds.delete(id);
+        feed().knownIds.delete(id);
       }
     } catch {}
   }));
   exitSelect();
   toast("已删除 " + ok + " 项");
+  refreshUsage(true);
 }
 
 async function fetchPage(c) {
-  const qs = c ? "?cursor=" + encodeURIComponent(c) + "&limit=40" : "?limit=40";
+  const poolQs = "&pool=" + activePool;
+  const qs = c ? "?cursor=" + encodeURIComponent(c) + "&limit=40" + poolQs : "?limit=40" + poolQs;
   const res = await fetch("/api/list" + qs, { headers: authHeaders() });
   if (!res.ok) throw new Error("list failed");
   return res.json();
@@ -314,16 +378,21 @@ async function loadTextSnippet(card) {
 }
 
 function makeCell(item) {
-  const text = isText(item), image = isImage(item);
+  // Archive images without a thumbnail must not render as an <img>: the
+  // server's thumb fallback would stream the full (possibly 500 MB) image.
+  // They fall into the file-card branch instead.
+  const text = isText(item), image = isImage(item) && (item.hasThumb || item.pool !== "archive");
   const el = document.createElement(image ? "img" : "div");
   el.dataset.id = item.id;
   el.dataset.kind = text ? "text" : image ? "image" : "file";
+  if (item.pool === "archive") el.classList.add("arch");
   if (text) {
     el.className = "txtcell";
     // /api/list now carries the preview, so the card renders its real text on
     // first paint. The "…" placeholder and the lazy fetch remain for items the
     // server did not inline (past MAX_INLINE_SNIPPETS, or a failed read).
     el.textContent = item.snippet || "…";
+    if (item.pool === "archive") appendBadge(el);
   } else if (!image) {
     el.className = "filecell";
     const icon = document.createElement("div"); icon.className = "icon"; icon.textContent = fileIcon(item.contentType || "");
@@ -331,6 +400,7 @@ function makeCell(item) {
     const meta = document.createElement("div"); meta.className = "meta";
     meta.textContent = [item.contentType || "application/octet-stream", formatBytes(item.size)].filter(Boolean).join(" · ");
     el.append(icon, name, meta);
+    if (item.pool === "archive") appendBadge(el);
   }
   el.onclick = () => { if (selectMode) toggleSelect(el); else openFull(item); };
   // Nothing left to load for a text card that already has its snippet —
@@ -339,8 +409,16 @@ function makeCell(item) {
   return el;
 }
 
+function appendBadge(el) {
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.textContent = "归档";
+  el.appendChild(badge);
+}
+
 function appendItems(items, prepend) {
   const grid = document.querySelector("#grid");
+  const knownIds = feed().knownIds;
   for (const it of items) {
     if (knownIds.has(it.id)) continue;
     knownIds.add(it.id);
@@ -350,12 +428,13 @@ function appendItems(items, prepend) {
 }
 
 async function loadMore() {
-  if (loading || cursor === false) return;
+  const f = feed();
+  if (loading || f.cursor === false) return;
   loading = true;
   try {
-    const { items, cursor: next } = await fetchPage(cursor);
+    const { items, cursor: next } = await fetchPage(f.cursor);
     appendItems(items, false);
-    cursor = next || false;
+    f.cursor = next || false;
   } finally { loading = false; }
 }
 
@@ -363,8 +442,25 @@ async function poll() {
   try {
     const { items } = await fetchPage(null);
     // Server returns newest-first; reverse the new batch so prepending yields newest at top.
-    appendItems(items.filter((i) => !knownIds.has(i.id)).reverse(), true);
+    appendItems(items.filter((i) => !feed().knownIds.has(i.id)).reverse(), true);
   } catch {}
+}
+
+async function renderActivePool() {
+  feed().cursor = null;
+  feed().knownIds = new Set();
+  document.querySelector("#grid").innerHTML = "";
+  await loadMore();
+}
+
+function switchPool(pool) {
+  if (activePool === pool) return;
+  if (selectMode) exitSelect();
+  activePool = pool;
+  $("#tabTransit").classList.toggle("on", pool === "transit");
+  $("#tabArchive").classList.toggle("on", pool === "archive");
+  $("#uploadBtn").textContent = pool === "archive" ? "+ 归档" : "+ 图片";
+  renderActivePool();
 }
 
 async function initFeed() {
@@ -376,9 +472,7 @@ async function initFeed() {
     }
   }, { rootMargin: "200px" });
 
-  cursor = null; knownIds = new Set();
-  document.querySelector("#grid").innerHTML = "";
-  await loadMore();
+  await renderActivePool();
 
   window.onscroll = () => {
     if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 400) loadMore();
@@ -393,6 +487,40 @@ function fitDims(w, h, maxEdge) {
   const s = maxEdge / longEdge;
   return { w: Math.round(w * s), h: Math.round(h * s) };
 }
+
+// ---- Usage meter + quota guard ------------------------------------------
+
+let usageCache = null, usageAt = 0;
+async function refreshUsage(force) {
+  if (!force && usageCache && Date.now() - usageAt < 60000) return usageCache;
+  try {
+    const res = await fetch("/api/usage", { headers: authHeaders() });
+    if (res.ok) { usageCache = await res.json(); usageAt = Date.now(); renderUsage(); }
+  } catch {}
+  return usageCache;
+}
+
+function renderUsage() {
+  const u = usageCache;
+  if (!u) return;
+  const total = u.quotaBytes || QUOTA_BYTES;
+  $("#usageText").textContent = "中转 " + formatBytes(u.transitBytes) + " · 归档 " + formatBytes(u.archiveBytes)
+    + (u.stagingBytes ? " · 待提交 " + formatBytes(u.stagingBytes) : "")
+    + " / " + formatBytes(total);
+  $("#usageTransit").style.width = Math.min(100, u.transitBytes / total * 100) + "%";
+  $("#usageArchive").style.width = Math.min(100, u.archiveBytes / total * 100) + "%";
+}
+
+// Second confirmation before an upload pushes the pool past the R2 free tier.
+async function quotaConfirm(sizeBytes) {
+  const u = await refreshUsage(true);
+  if (u && u.totalBytes + sizeBytes > (u.quotaBytes || QUOTA_BYTES)) {
+    return confirm("这将超出 10GB 免费存储额度，R2 可能产生费用。仍要上传？");
+  }
+  return true;
+}
+
+// ---- Uploads -------------------------------------------------------------
 
 async function encode(bitmap, maxEdge, type, quality) {
   const { w, h } = maxEdge ? fitDims(bitmap.width, bitmap.height, maxEdge)
@@ -431,6 +559,76 @@ async function sendText(text) {
   return true;
 }
 
+// Archive upload: the file goes browser → R2 directly through a presigned PUT
+// (500 MB cannot transit the Worker). The PUT must carry NO auth header and a
+// type-less Blob body — the signature covers only the URL, and a Content-Type
+// header the browser adds on its own would break it. The real content type and
+// filename ride along on commit, which server-side-copies the staged object
+// into its final a/full/<id> key.
+async function uploadArchive(file) {
+  const mime = ((file.type || "application/octet-stream").split(";")[0] || "application/octet-stream").toLowerCase();
+  const initRes = await fetch("/api/archive/init", {
+    method: "POST",
+    headers: { ...authHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ contentType: mime, origName: file.name || "", size: file.size }),
+  });
+  if (initRes.status === 503) { toast("此部署未配置归档存储"); return; }
+  if (!initRes.ok) throw new Error("init failed");
+  const { id, uploadUrl } = await initRes.json();
+
+  let hasThumb = false;
+  if (mime.startsWith("image/") && file.size <= THUMB_MAX_BYTES) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      try {
+        const thumb = await encode(bitmap, 480, "image/jpeg", 0.7);
+        const fd = new FormData();
+        fd.set("thumb", thumb, "t.jpg");
+        const thumbRes = await fetch("/api/archive/thumb?id=" + id, { method: "POST", headers: authHeaders(), body: fd });
+        hasThumb = thumbRes.ok;
+      } finally { bitmap.close(); }
+    } catch { /* not decodable in this browser — ship the file card instead */ }
+  }
+
+  toast("归档上传中…");
+  try {
+    const put = await fetch(uploadUrl, { method: "PUT", body: new Blob([file]) });
+    if (!put.ok) throw new Error("direct upload failed");
+    const commit = await fetch("/api/archive/commit", {
+      method: "POST",
+      headers: { ...authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ id, contentType: mime, origName: file.name || "", hasThumb }),
+    });
+    if (!commit.ok) throw new Error("commit failed");
+  } catch (e) {
+    // Best-effort cleanup of the staged object; the a/inbox/ lifecycle rule is
+    // the backstop when even this doesn't make it out.
+    try {
+      await fetch("/api/archive/abort", {
+        method: "POST", headers: { ...authHeaders(), "content-type": "application/json" },
+        keepalive: true, body: JSON.stringify({ id }),
+      });
+    } catch {}
+    throw e;
+  }
+}
+
+// Files bigger than the transit cap must go through the archive's direct-to-R2
+// path; on the archive tab everything does, so the tab doubles as a destination
+// selector. Transit images keep the JPEG conversion (uploadOne); transit files
+// upload verbatim, as they always have.
+function routeUpload(file, isImageIntake) {
+  if (activePool === "archive" || file.size > MAX_TRANSIT_BYTES) return uploadArchive(file);
+  return isImageIntake ? uploadOne(file) : uploadTransitFile(file);
+}
+
+async function uploadTransitFile(file) {
+  const fd = new FormData();
+  fd.set("full", file, file.name || "upload");
+  const res = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "x-source": "pwa-file" }, body: fd });
+  if (!res.ok) throw new Error("upload failed");
+}
+
 function setupUpload() {
   const imageInput = $("#imageInput"), fileInput = $("#fileInput");
   $("#uploadBtn").onclick = () => imageInput.click();
@@ -439,10 +637,14 @@ function setupUpload() {
     imageInput.value = "";
     let ok = 0;
     for (const f of files) {
-      try { await uploadOne(f); ok++; } catch { toast("有图上传失败"); }
+      try {
+        if (!(await quotaConfirm(f.size))) { toast("已取消上传"); continue; }
+        await routeUpload(f, true); ok++;
+      } catch { toast("有图上传失败"); }
     }
     if (ok > 0) toast(ok === files.length ? "上传完成" : ok + "/" + files.length + " 上传成功");
     await poll();
+    refreshUsage(true);
   };
 
   $("#fileBtn").onclick = () => fileInput.click();
@@ -451,24 +653,25 @@ function setupUpload() {
     fileInput.value = "";
     let ok = 0;
     for (const file of files) {
-      const fd = new FormData();
-      fd.set("full", file, file.name || "upload");
       try {
-        const res = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "x-source": "pwa-file" }, body: fd });
-        if (!res.ok) throw new Error("upload failed");
-        ok++;
+        if (!(await quotaConfirm(file.size))) { toast("已取消上传"); continue; }
+        await routeUpload(file, false); ok++;
       } catch { toast("有文件上传失败"); }
     }
     if (ok > 0) toast(ok === files.length ? "上传完成" : ok + "/" + files.length + " 上传成功");
     await poll();
+    refreshUsage(true);
   };
 
   const compose = $("#compose"), composeText = $("#composeText");
   $("#textBtn").onclick = () => { composeText.value = ""; compose.classList.remove("hidden"); composeText.focus(); };
   $("#composeCancel").onclick = () => compose.classList.add("hidden");
   $("#composeSend").onclick = async () => {
-    if (await sendText(composeText.value)) { compose.classList.add("hidden"); toast("已发送"); await poll(); }
+    if (await sendText(composeText.value)) { compose.classList.add("hidden"); toast("已发送"); await poll(); refreshUsage(true); }
   };
+
+  $("#tabTransit").onclick = () => switchPool("transit");
+  $("#tabArchive").onclick = () => switchPool("archive");
 
   $("#selectBtn").onclick = enterSelect;
   $("#cancelSelBtn").onclick = exitSelect;
@@ -482,7 +685,7 @@ if ("serviceWorker" in navigator) {
 // Read-only demo pool: no token gate, no write affordances, a link back to the repo.
 async function enterDemo() {
   showApp();
-  ["#uploadBtn", "#textBtn", "#selectBtn", "#shareBtn", "#delBtn"].forEach((s) => $(s).classList.add("hidden"));
+  ["#uploadBtn", "#textBtn", "#selectBtn", "#shareBtn", "#delBtn", "#promoteBtn", "#tabArchive"].forEach((s) => $(s).classList.add("hidden"));
   if (DEMO_EN) document.documentElement.lang = "en";
   $("#bar h1").textContent = DEMO_EN ? "shotsync · read-only demo" : "shotsync · 只读演示池";
   $("#closeBtn").textContent = DEMO_EN ? "Close" : "关闭";
@@ -498,7 +701,7 @@ async function enterDemo() {
 
 (async function boot() {
   if (DEMO) { await enterDemo(); return; }
-  if (token && await apiOk()) { showApp(); setupUpload(); await initFeed(); }
+  if (token && await apiOk()) { showApp(); setupUpload(); refreshUsage(true); await initFeed(); }
   else { showGate(); }
 })();
 </script>

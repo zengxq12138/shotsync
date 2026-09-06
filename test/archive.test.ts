@@ -52,7 +52,7 @@ function jsonReq(path: string, body: unknown, headers: Record<string, string> = 
 }
 
 describe("s3 helpers (unit)", () => {
-  it("presignPut produces a signed query-string PUT with no signed content-type", async () => {
+  it("presignPut signs host-only query-string PUTs (browser sends no headers)", async () => {
     const url = new URL(await presignPut(E, "a/inbox/0000001234567890-abc123"));
     expect(url.protocol).toBe("https:");
     expect(url.pathname).toBe("/test-bucket/a/inbox/0000001234567890-abc123");
@@ -60,7 +60,8 @@ describe("s3 helpers (unit)", () => {
     expect(url.searchParams.get("X-Amz-Content-Sha256")).toBe("UNSIGNED-PAYLOAD");
     expect(Number(url.searchParams.get("X-Amz-Expires"))).toBeLessThanOrEqual(3600);
     expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
-    // the browser must be free to send no Content-Type at all
+    // the client PUTs a type-less Blob, so no Content-Type header is sent and
+    // the signature only needs to cover the host
     expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
   });
 

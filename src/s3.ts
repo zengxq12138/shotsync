@@ -29,10 +29,11 @@ function client(env: Env): AwsClient {
   });
 }
 
-// Signed PUT URL the browser uploads a staged archive object to. Only the URL
-// is signed: the browser must send the PUT with no extra headers at all (a
-// Content-Type header would break the SigV4 signature), and UNSIGNED-PAYLOAD
-// spares the browser hashing a 500 MB body.
+// Signed PUT URL the browser uploads a staged archive object to. Only the host
+// is signed: the client PUTs a type-less Blob (`new Blob([file])`), which keeps
+// the browser from attaching a Content-Type header that would break the SigV4
+// signature. UNSIGNED-PAYLOAD spares the browser hashing a 500 MB body. The
+// real content type is attached later by commit's metadata-replacing copy.
 export async function presignPut(env: Env, key: string): Promise<string> {
   const url = new URL(objectUrl(env, key));
   url.searchParams.set("X-Amz-Expires", String(PRESIGN_EXPIRES_SEC));
