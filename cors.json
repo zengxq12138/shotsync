@@ -2,7 +2,7 @@
   "rules": [
     {
       "allowed": {
-        "origins": ["https://shotsync.defiabell.workers.dev"],
+        "origins": ["https://shotsync.zengxiangqing12138.workers.dev"],
         "methods": ["PUT"],
         "headers": []
       },
