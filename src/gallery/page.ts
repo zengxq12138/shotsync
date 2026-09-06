@@ -42,12 +42,20 @@ export const galleryHTML = /* html */ `<!doctype html>
                       border: 1px solid #333; background: #1c1c1c; color: #eee; font-size: 15px; }
   #compose .row { display: flex; justify-content: flex-end; gap: 10px; }
   #grid .sel { outline: 3px solid #2b6cff; outline-offset: -3px; opacity: .8; }
-  /* Pool tabs: transit is the app blue, archive gets the amber accent used
-     everywhere archive items appear. */
-  #tabs { display: flex; gap: 4px; }
-  .tab { background: #444; padding: 8px 12px; font-size: 14px; }
-  .tab.on { background: #2b6cff; }
-  .tab#tabArchive.on { background: #c9a227; }
+  /* Pool switcher: a full-width segmented control on its own row — the two
+     pools are different destinations with different retention, so switching
+     must read as a mode change, not another action button. */
+  #tabs { display: flex; flex-basis: 100%; background: #222; border-radius: 10px; padding: 3px; gap: 3px; }
+  .tab { flex: 1; background: transparent; color: #bbb; padding: 8px 0; font-size: 15px; line-height: 1.2; }
+  .tab small { display: block; font-size: 10px; color: #888; }
+  .tab.on { background: #2b6cff; color: #fff; }
+  .tab.on small { color: #cfe0ff; }
+  .tab#tabArchive.on { background: #c9a227; color: #1a1a1a; }
+  .tab#tabArchive.on small { color: #4a3b0a; }
+  /* Where the next upload lands — tinted to match the active pool. */
+  #poolHint { flex-basis: 100%; font-size: 12px; padding: 5px 9px; border-radius: 6px;
+              color: #8ab4ff; background: rgba(43,108,255,.1); border: 1px solid rgba(43,108,255,.25); }
+  #poolHint.arch { color: #e0b93f; background: rgba(201,162,39,.1); border-color: rgba(201,162,39,.3); }
   /* Usage meter under the header: transit blue + archive amber segments. */
   #usage { width: 100%; }
   #usageText { font-size: 12px; color: #aaa; }
@@ -76,9 +84,10 @@ export const galleryHTML = /* html */ `<!doctype html>
   <header class="hidden" id="bar">
     <h1>shotsync</h1>
     <div id="tabs">
-      <button class="tab on" id="tabTransit">中转</button>
-      <button class="tab" id="tabArchive">归档</button>
+      <button class="tab on" id="tabTransit">中转<small>30 天清理</small></button>
+      <button class="tab" id="tabArchive">归档<small>永久保存</small></button>
     </div>
+    <div id="poolHint">上传到中转池 · 30 天后自动清理 · 单文件 ≤ 50MB</div>
     <input id="imageInput" type="file" accept="image/*" multiple class="hidden">
     <input id="fileInput" type="file" multiple class="hidden">
     <button id="textBtn" style="background:#444">✎ 文字</button>
@@ -251,7 +260,10 @@ document.querySelector("#shareBtn").onclick = async () => {
 };
 
 // Save/download the current full image. Mobile: Web Share (save to Photos / forward).
-// Desktop or no-share: trigger a file download. Re-fetches the blob (viewer URL is revoked on load).
+// Desktop: always a plain anchor download — the desktop share sheet is
+// unreliable with non-ASCII filenames (archive items keep their original
+// names, unlike transit uploads) and its failures/cancels surface as nothing
+// happening at all. Re-fetches the blob (viewer URL is revoked on load).
 document.querySelector("#saveBtn").onclick = async () => {
   if (!currentId) return;
   if (currentKind === "text") {
@@ -259,6 +271,7 @@ document.querySelector("#saveBtn").onclick = async () => {
     catch { toast(DEMO_EN ? "Copy failed — long-press to select" : "复制失败，请长按选择"); }
     return;
   }
+  toast(DEMO_EN ? "Preparing download…" : "准备下载…");
   try {
     const res = await fetch("/i/" + currentId + "?size=full", { headers: authHeaders() });
     if (!res.ok) { toast(DEMO_EN ? "Save failed" : "保存失败"); return; }
@@ -266,20 +279,26 @@ document.querySelector("#saveBtn").onclick = async () => {
     const ext = (blob.type.split("/")[1] || "bin").replace("jpeg", "jpg");
     const name = (currentItem && currentItem.name) || currentId + "." + ext;
     const file = new File([blob], name, { type: blob.type || "application/octet-stream" });
-    // A generic file's primary action is download. Desktop Chrome may report
-    // that it can share files but then show no useful save action, leaving the
-    // user with a "下载" button that appears to do nothing. Keep native sharing
-    // for images (useful for saving to Photos on mobile), but always trigger a
-    // normal browser download for files.
-    if (currentKind !== "file" && navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file] });
-    } else {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = file.name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Keep native sharing only where its real value lies — saving images to
+    // Photos on a phone. If it errors (not user-cancelled), fall back to the
+    // anchor download instead of dying silently.
+    const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    if (currentKind !== "file" && mobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        return;
+      } catch (e) {
+        if (e && e.name === "AbortError") return; // user closed the share sheet
+      }
     }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    // Generous grace period: revoking too early can cut off a large in-flight
+    // download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast(DEMO_EN ? "Download started" : "已开始下载");
   } catch (e) {
     if (e && e.name !== "AbortError") toast(DEMO_EN ? "Save failed" : "保存失败"); // ignore user-cancelled share
   }
@@ -317,17 +336,32 @@ function toggleSelect(el) {
   else { selected.add(id); el.classList.add("sel"); }
   $("#delSelBtn").textContent = "删除选中 (" + selected.size + ")";
 }
+// One place decides which action buttons are visible: selection mode replaces
+// them with delete/cancel, and the archive tab hides 文字 (text is a transit
+// clipboard feature; archive accepts files and images only).
+function updateActionBar() {
+  const archive = activePool === "archive";
+  $("#selectBtn").classList.toggle("hidden", selectMode);
+  $("#delSelBtn").classList.toggle("hidden", !selectMode);
+  $("#cancelSelBtn").classList.toggle("hidden", !selectMode);
+  $("#textBtn").classList.toggle("hidden", selectMode || archive);
+  $("#uploadBtn").classList.toggle("hidden", selectMode);
+  $("#fileBtn").classList.toggle("hidden", selectMode);
+  const hint = $("#poolHint");
+  hint.textContent = archive
+    ? "上传到归档池 · 永久保存 · 单文件 ≤ 500MB"
+    : "上传到中转池 · 30 天后自动清理 · 单文件 ≤ 50MB";
+  hint.classList.toggle("arch", archive);
+}
 function enterSelect() {
   selectMode = true; selected.clear();
-  $("#selectBtn").classList.add("hidden"); $("#textBtn").classList.add("hidden"); $("#uploadBtn").classList.add("hidden"); $("#fileBtn").classList.add("hidden");
-  $("#delSelBtn").classList.remove("hidden"); $("#cancelSelBtn").classList.remove("hidden");
   $("#delSelBtn").textContent = "删除选中 (0)";
+  updateActionBar();
 }
 function exitSelect() {
   selectMode = false; selected.clear();
   document.querySelectorAll("#grid .sel").forEach((e) => e.classList.remove("sel"));
-  $("#selectBtn").classList.remove("hidden"); $("#textBtn").classList.remove("hidden"); $("#uploadBtn").classList.remove("hidden"); $("#fileBtn").classList.remove("hidden");
-  $("#delSelBtn").classList.add("hidden"); $("#cancelSelBtn").classList.add("hidden");
+  updateActionBar();
 }
 async function deleteSelected() {
   if (!selected.size) { exitSelect(); return; }
@@ -459,7 +493,9 @@ function switchPool(pool) {
   activePool = pool;
   $("#tabTransit").classList.toggle("on", pool === "transit");
   $("#tabArchive").classList.toggle("on", pool === "archive");
-  $("#uploadBtn").textContent = pool === "archive" ? "+ 归档" : "+ 图片";
+  // Button labels describe what you pick ("+ 图片" / "+ 文件"); the destination
+  // is what the active tab + hint strip say, not a per-button prefix.
+  updateActionBar();
   renderActivePool();
 }
 
@@ -685,7 +721,7 @@ if ("serviceWorker" in navigator) {
 // Read-only demo pool: no token gate, no write affordances, a link back to the repo.
 async function enterDemo() {
   showApp();
-  ["#uploadBtn", "#textBtn", "#selectBtn", "#shareBtn", "#delBtn", "#promoteBtn", "#tabArchive"].forEach((s) => $(s).classList.add("hidden"));
+  ["#uploadBtn", "#textBtn", "#selectBtn", "#shareBtn", "#delBtn", "#promoteBtn", "#tabArchive", "#poolHint"].forEach((s) => $(s).classList.add("hidden"));
   if (DEMO_EN) document.documentElement.lang = "en";
   $("#bar h1").textContent = DEMO_EN ? "shotsync · read-only demo" : "shotsync · 只读演示池";
   $("#closeBtn").textContent = DEMO_EN ? "Close" : "关闭";
