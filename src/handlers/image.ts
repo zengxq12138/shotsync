@@ -11,7 +11,9 @@ export function responseHeaders(obj: R2ObjectBody, cacheControl: string): Header
   const contentType = obj.httpMetadata?.contentType || "application/octet-stream";
   const headers = new Headers({
     "content-type": contentType,
-    "cache-control": cacheControl,
+    // Editable text must always be revalidated. Images and immutable files keep
+    // their existing long-lived browser cache behaviour.
+    "cache-control": contentType === "text/plain" ? "private, no-store" : cacheControl,
     "x-content-type-options": "nosniff",
   });
   // Keep images and the app's text notes viewable. All other content is an

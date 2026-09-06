@@ -36,6 +36,8 @@ export const galleryHTML = /* html */ `<!doctype html>
   #grid .filecell .meta { color: #aaa; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #viewerText { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 16px; white-space: pre-wrap;
                 word-break: break-word; color: #eee; font: 14px/1.6 ui-monospace, monospace; }
+  #viewerTextEdit { flex: 1; min-height: 0; resize: none; margin: 12px; padding: 14px; border-radius: 8px;
+                    border: 1px solid #555; background: #171717; color: #eee; font: 14px/1.6 ui-monospace, monospace; }
   #compose { position: fixed; inset: 0; z-index: 11; background: rgba(0,0,0,.92);
              display: flex; flex-direction: column; gap: 10px; padding: 12px; }
   #compose textarea { flex: 1; min-height: 0; resize: none; padding: 12px; border-radius: 8px;
@@ -115,6 +117,9 @@ export const galleryHTML = /* html */ `<!doctype html>
   <div id="viewer" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.95);display:flex;flex-direction:column;z-index:10">
     <div style="display:flex;justify-content:flex-end;gap:10px;padding:10px">
       <button id="promoteBtn" class="hidden">转存归档</button>
+      <button id="editTextBtn" class="hidden" style="background:#8a6410">编辑</button>
+      <button id="saveTextBtn" class="hidden" style="background:#0a8a5f">保存修改</button>
+      <button id="cancelTextEditBtn" class="hidden" style="background:#444">取消编辑</button>
       <button id="shareBtn" style="background:#0a8a5f">分享</button>
       <button id="saveBtn" style="background:#2b6cff">保存</button>
       <button id="delBtn" style="background:#d23">删除</button>
@@ -122,6 +127,7 @@ export const galleryHTML = /* html */ `<!doctype html>
     </div>
     <img id="viewerImg" class="hidden" style="flex:1;min-height:0;object-fit:contain;width:100%">
     <pre id="viewerText" class="hidden"></pre>
+    <textarea id="viewerTextEdit" class="hidden" aria-label="编辑文字"></textarea>
     <div id="viewerFile" class="hidden" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center">
       <div style="font-size:56px">📄</div><strong id="viewerFileName"></strong><span id="viewerFileMeta" style="color:#aaa"></span>
     </div>
@@ -189,6 +195,7 @@ function fileIcon(type) {
 async function openFull(item) {
   currentId = item.id; currentItem = item;
   const v = $("#viewer"), img = $("#viewerImg"), txt = $("#viewerText"), file = $("#viewerFile");
+  setTextEditMode(false);
   img.removeAttribute("src"); img.classList.add("hidden");
   txt.textContent = ""; txt.classList.add("hidden");
   file.classList.add("hidden");
@@ -196,6 +203,7 @@ async function openFull(item) {
   // Only transit items can be promoted; archive items are already permanent.
   $("#promoteBtn").classList.toggle("hidden", !(item.pool === "transit" && !DEMO));
   currentKind = isText(item) ? "text" : isImage(item) ? "image" : "file";
+  $("#editTextBtn").classList.toggle("hidden", currentKind !== "text" || DEMO);
   if (currentKind === "file") {
     $("#viewerFileName").textContent = item.name || "未命名文件";
     $("#viewerFileMeta").textContent = [item.contentType || "application/octet-stream", formatBytes(item.size)].filter(Boolean).join(" · ");
@@ -221,7 +229,49 @@ async function openFull(item) {
   } catch {}
 }
 
-document.querySelector("#closeBtn").onclick = () => document.querySelector("#viewer").classList.add("hidden");
+function setTextEditMode(editing) {
+  const editor = $("#viewerTextEdit");
+  editor.classList.toggle("hidden", !editing);
+  $("#viewerText").classList.toggle("hidden", editing || currentKind !== "text");
+  $("#editTextBtn").classList.toggle("hidden", editing || currentKind !== "text" || DEMO);
+  $("#saveTextBtn").classList.toggle("hidden", !editing);
+  $("#cancelTextEditBtn").classList.toggle("hidden", !editing);
+}
+
+$("#editTextBtn").onclick = () => {
+  $("#viewerTextEdit").value = $("#viewerText").textContent;
+  setTextEditMode(true);
+  $("#viewerTextEdit").focus();
+};
+
+$("#cancelTextEditBtn").onclick = () => setTextEditMode(false);
+
+$("#saveTextBtn").onclick = async () => {
+  if (!currentId || !currentItem) return;
+  const text = $("#viewerTextEdit").value;
+  const bytes = new TextEncoder().encode(text).byteLength;
+  if (bytes > MAX_TRANSIT_BYTES) { toast("文字超过 50MB，无法保存"); return; }
+  try {
+    const res = await fetch("/api/text/" + encodeURIComponent(currentId) + "?pool=" + currentItem.pool, {
+      method: "PUT",
+      headers: { ...authHeaders(), "content-type": "text/plain;charset=utf-8" },
+      body: text,
+    });
+    if (!res.ok) { toast("保存失败"); return; }
+    $("#viewerText").textContent = text;
+    currentItem.snippet = text.slice(0, 140);
+    const cell = document.querySelector('#grid [data-id="' + currentId + '"]');
+    if (cell && cell.firstChild) cell.firstChild.nodeValue = currentItem.snippet;
+    setTextEditMode(false);
+    toast("已保存");
+    refreshUsage(true);
+  } catch { toast("保存失败"); }
+};
+
+document.querySelector("#closeBtn").onclick = () => {
+  setTextEditMode(false);
+  document.querySelector("#viewer").classList.add("hidden");
+};
 
 // Transit → archive: server-side copy, id unchanged, cell hops to the archive
 // tab on its next load.
@@ -337,14 +387,13 @@ function toggleSelect(el) {
   $("#delSelBtn").textContent = "删除选中 (" + selected.size + ")";
 }
 // One place decides which action buttons are visible: selection mode replaces
-// them with delete/cancel, and the archive tab hides 文字 (text is a transit
-// clipboard feature; archive accepts files and images only).
+// them with delete/cancel. Text, images and files all follow the active pool.
 function updateActionBar() {
   const archive = activePool === "archive";
   $("#selectBtn").classList.toggle("hidden", selectMode);
   $("#delSelBtn").classList.toggle("hidden", !selectMode);
   $("#cancelSelBtn").classList.toggle("hidden", !selectMode);
-  $("#textBtn").classList.toggle("hidden", selectMode || archive);
+  $("#textBtn").classList.toggle("hidden", selectMode);
   $("#uploadBtn").classList.toggle("hidden", selectMode);
   $("#fileBtn").classList.toggle("hidden", selectMode);
   const hint = $("#poolHint");
@@ -588,8 +637,19 @@ async function uploadOne(file) {
 
 async function sendText(text) {
   if (!text.trim()) return false;
+  const note = new File([text], "note.txt", { type: "text/plain" });
+  if (activePool === "archive") {
+    if (!(await quotaConfirm(note.size))) { toast("已取消上传"); return false; }
+    try {
+      await uploadArchive(note);
+      return true;
+    } catch {
+      toast("文字归档失败");
+      return false;
+    }
+  }
   const fd = new FormData();
-  fd.set("full", new Blob([text], { type: "text/plain" }), "note.txt");
+  fd.set("full", note, note.name);
   const res = await fetch("/api/upload", { method: "POST", headers: { ...authHeaders(), "x-source": "pwa" }, body: fd });
   if (!res.ok) { toast("文字发送失败"); return false; }
   return true;
@@ -721,7 +781,7 @@ if ("serviceWorker" in navigator) {
 // Read-only demo pool: no token gate, no write affordances, a link back to the repo.
 async function enterDemo() {
   showApp();
-  ["#uploadBtn", "#textBtn", "#selectBtn", "#shareBtn", "#delBtn", "#promoteBtn", "#tabArchive", "#poolHint"].forEach((s) => $(s).classList.add("hidden"));
+  ["#uploadBtn", "#textBtn", "#selectBtn", "#editTextBtn", "#shareBtn", "#delBtn", "#promoteBtn", "#tabArchive", "#poolHint"].forEach((s) => $(s).classList.add("hidden"));
   if (DEMO_EN) document.documentElement.lang = "en";
   $("#bar h1").textContent = DEMO_EN ? "shotsync · read-only demo" : "shotsync · 只读演示池";
   $("#closeBtn").textContent = DEMO_EN ? "Close" : "关闭";

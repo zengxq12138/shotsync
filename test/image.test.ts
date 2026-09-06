@@ -50,4 +50,11 @@ describe("handleImage", () => {
     expect(res.status).toBe(200);
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([7]));
   });
+
+  it("does not browser-cache editable text", async () => {
+    await put(fullKey("transit", "ID", "txt"), "text/plain", [104, 105]);
+    const res = await handleImage(req(), env as any, "ID");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(await res.text()).toBe("hi");
+  });
 });

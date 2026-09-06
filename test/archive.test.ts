@@ -150,6 +150,26 @@ describe("handleArchiveCommit", () => {
     expect(await B.head(inboxKey(id))).toBeNull();
   });
 
+  it("commits plain text as a permanent archive text item", async () => {
+    const id = makeId(1000, "text11");
+    await B.put(inboxKey(id), "keep this note");
+
+    const res = await handleArchiveCommit(
+      jsonReq("/api/archive/commit", { id, contentType: "text/plain", origName: "note.txt", hasThumb: false }),
+      E,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id, pool: "archive" });
+    const archived = await B.get(fullKey("archive", id, "txt"));
+    expect(archived).not.toBeNull();
+    expect(archived!.httpMetadata?.contentType).toBe("text/plain");
+    expect(archived!.customMetadata?.origName).toBe("note.txt");
+    expect(archived!.customMetadata?.hasThumb).toBe("false");
+    expect(await archived!.text()).toBe("keep this note");
+    expect(await B.head(inboxKey(id))).toBeNull();
+  });
+
   it("keeps staging when the copy fails, so nothing is lost", async () => {
     copyState.impl = "fail";
     try {

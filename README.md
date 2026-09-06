@@ -140,7 +140,7 @@ The gallery shows every item newest-first and auto-refreshes every ~20 s, so any
 
 ### 2. Add things to the pool
 - **Image** — tap **`+ 图片`** (Add image): pick from photos or camera. It's converted to JPEG and thumbnailed in your browser, then uploaded.
-- **Text** — tap **`✎ 文字`** (Text), paste/type a snippet, then **`发送`** (Send). It becomes a text card — a cross-device clipboard.
+- **Text** — in either the transit or archive tab, tap **`✎ 文字`** (Text), paste/type a snippet, then **`发送`** (Send). Transit text is retained for 30 days; archived text is kept permanently.
 - **File** — tap **`+ 文件`** (Add file): select a PDF, video, audio file, archive, document, or any other file. Its original name and MIME type are retained; each file is limited to 50 MB.
 - **Archive** — tap the **`归档`** (Archive) tab, then **`+ 归档`**: same kinds of files but up to 500 MB each, never auto-deleted. Large files upload directly from your browser to R2 (requires the [archive pool setup](#archive-pool-optional)). Small images also generate thumbnails.
 - **Promote** — anything in the transit pool can be kept: open it and tap **`转存归档`** (Promote to archive) to copy it into the archive pool; it stops counting toward the 30-day cleanup.
@@ -149,6 +149,7 @@ The gallery shows every item newest-first and auto-refreshes every ~20 s, so any
 
 ### 3. Open one item (tap it)
 Tap any thumbnail/card to open it full-screen, then:
+- **`编辑` / `保存修改`** (Edit / Save changes) — edit text cards in either pool in place, retaining their ID, share links and retention policy.
 - **`保存` / `复制` / `下载`** (Save / Copy / Download) — image: save to Photos (mobile) or download (desktop); text: copy to clipboard; files: download or use the system share sheet.
 - **`分享`** (Share) — mint a **7-day public link** to just that item, copied to your clipboard. Anyone with the link can view that one item; the rest of the pool stays private.
 - **`删除`** (Delete) — remove this item.

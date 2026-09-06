@@ -5,6 +5,7 @@ import { handleImage } from "./handlers/image";
 import { handleDelete } from "./handlers/del";
 import { handleShareCreate, handleSharedItem } from "./handlers/share";
 import { handleUsage } from "./handlers/usage";
+import { handleTextUpdate } from "./handlers/text";
 import {
   handleArchiveAbort,
   handleArchiveCommit,
@@ -54,6 +55,10 @@ export default {
     }
     if (pathname === "/api/upload") {
       return m === "POST" ? handleUpload(request, env) : err(405, "method not allowed");
+    }
+    if (pathname.startsWith("/api/text/")) {
+      const id = decodeURIComponent(pathname.slice("/api/text/".length));
+      return m === "PUT" ? handleTextUpdate(request, env, id) : err(405, "method not allowed");
     }
     if (pathname === "/api/list") {
       return m === "GET" ? handleList(request, env) : err(405, "method not allowed");
