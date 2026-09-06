@@ -12,11 +12,11 @@ Your own cross-device image, text & file pool, deployable to Cloudflare's free t
 
 A single **Cloudflare Worker + R2 bucket** backing a small **PWA gallery**:
 
-- Upload **images** (auto-converted to JPEG + thumbnailed client-side), **text** snippets, and arbitrary **files** (up to 25 MB each).
+- Upload **images** (auto-converted to JPEG + thumbnailed client-side), **text** snippets, and arbitrary **files** (up to 50 MB each).
 - View a newest-first feed on any device; tap to view full, **save/download**, or **delete**.
 - Mint a **signed, expiring public link** to share one item — without exposing the rest of the pool.
 - **Token-gated**: one shared secret unlocks the pool; everything else stays private.
-- A **30-day transit pool** (auto-deleted), not an archive.
+- Two pools: a **30-day transit pool** for passing things between devices, plus an **optional permanent archive** (up to 500 MB per file).
 
 ## Why
 
@@ -32,9 +32,9 @@ The dividing line is **a live transfer vs. a pool that waits**. LocalSend and Pa
 | Install | none (PWA in the browser) | an app on every device | none (browser) |
 | Across different networks | yes | no — same local network | via a temporary public room |
 | Where the bytes go | your own Cloudflare R2 | device to device, no server | peer-to-peer, public signalling server |
-| Left behind after transfer | 30 days, browsable | nothing | nothing |
+| Left behind after transfer | 30 days (or permanently in the archive pool), browsable | nothing | nothing |
 | Setup | deploy once, ~5 min | install, then open | just open the page |
-| Per-item size limit | 25 MB | bounded by disk | bounded by the connection |
+| Per-item size limit | 50 MB (500 MB in the archive pool) | bounded by disk | bounded by the connection |
 
 **Choose LocalSend if** both devices are on the same Wi-Fi, both in front of you, and the file is large. It is peer-to-peer, has no practical size ceiling, and needs no internet at all.
 
@@ -52,9 +52,11 @@ The dividing line is **a live transfer vs. a pool that waits**. LocalSend and Pa
 - Signed, expiring public share links (HMAC-SHA256, 7 days)
 - Per-item save/download + multi-select batch delete
 - Single-token auth, constant-time compare, token never in URLs
-- 30-day auto-retention via R2 lifecycle
+- 30-day auto-retention for the transit pool via R2 lifecycle
+- Optional **archive pool**: files up to 500 MB uploaded directly to R2 via presigned URLs, never auto-deleted, one-tap promote from the transit pool
+- Shows per-pool + total usage, and warns before an upload would exceed R2's 10 GB free storage allowance
 - Runs entirely on the Cloudflare free tier (Workers + R2)
-- ~50 tests (Vitest + `@cloudflare/vitest-pool-workers`)
+- ~100 tests (Vitest + `@cloudflare/vitest-pool-workers`)
 
 ## Deploy your own (~5 min)
 
@@ -79,9 +81,67 @@ npm run deploy
 
 You also need a **workers.dev subdomain** (Dashboard → Workers & Pages, one-time) or a custom domain. After deploy you get `https://shotsync.<your-subdomain>.workers.dev`.
 
-### 30-day retention
+### Lifecycle rules (transit pool + staging)
 
-Dashboard → R2 → bucket `shotsync` → Settings → Object lifecycle rules → delete objects 30 days after creation.
+The gallery itself does not delete anything — the transit pool's 30-day cleanup is an **R2 lifecycle rule**. With the archive pool, rules must be **prefix-scoped**; a whole-bucket rule would delete your archive too.
+
+Dashboard → R2 → bucket `shotsync` → Settings → Object lifecycle rules. Create (or fix) these rules:
+
+| Rule | Prefix | Action |
+| --- | --- | --- |
+| Transit cleanup | `full/` | delete 30 days after creation |
+| Transit thumbs | `thumb/` | delete 30 days after creation |
+| Staging backstop | `a/inbox/` | delete 1 day after creation |
+| Archive | `a/full/`, `a/thumb/` | **no rule — leave alone** |
+
+⚠️ If you deployed earlier and created a whole-bucket "delete after 30 days" rule, **delete or scope it before uploading anything to the archive** — a bucket-wide rule permanently destroys archived files.
+
+### Archive pool (optional)
+
+By default the app is transit-only. To enable the archive pool (permanent storage, 500 MB per file), you create an R2 API token and two more settings. Large files are uploaded **directly from the browser to R2** via a presigned URL, so the Worker never handles the bytes.
+
+1. **Create an R2 API token**: Dashboard → R2 → *Manage R2 API Tokens* → Create API Token → permission **Object Read & Write**, scoped to only the `shotsync` bucket. Copy the Access Key ID and Secret Access Key.
+
+2. **Set the secrets** and the S3 endpoint (shown as "S3 API" in the bucket's dashboard, of the form `https://<accountid>.r2.cloudflarestorage.com/shotsync` — include the bucket path):
+
+   ```bash
+   npx wrangler secret put R2_ACCESS_KEY_ID      # paste Access Key ID
+   npx wrangler secret put R2_SECRET_ACCESS_KEY  # paste Secret Access Key
+   ```
+
+   and in `wrangler.toml` add (create a `[vars]` section if there isn't one):
+
+   ```toml
+   R2_S3_ENDPOINT = "https://<accountid>.r2.cloudflarestorage.com/shotsync"
+   ```
+
+3. **Allow the browser to PUT directly to R2** — one CORS rule on the bucket:
+
+   ```bash
+   npx wrangler r2 bucket cors set shotsync --file cors.json
+   ```
+
+   with `cors.json`:
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://shotsync.<your-subdomain>.workers.dev"],
+       "AllowedMethods": ["PUT"],
+       "AllowedHeaders": [],
+       "MaxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+   Replace the origin with your real Worker URL (no `*` — uploads are authenticated by the signed URL only, but the origin should still be yours). Re-run `npm run deploy` after editing `wrangler.toml`.
+
+Notes:
+
+- Transit items get a **转存归档** (promote to archive) button in the viewer — a zero-transfer server-side copy; the 30-day clock stops for that item. Share links (`/s/...`) keep working after promotion.
+- Archive images **≤ 50 MB** get client-generated thumbnails; larger files show as file-icon cards.
+- Before any upload, if `file size + current usage > 10 GB` the app asks you to confirm — beyond that point R2 storage may start costing money.
+- The [live demo](https://shotsync-demo.defiabell.workers.dev) is transit-only (no R2 credentials are configured), so the archive tab and promote button are hidden there.
 
 ## Using it
 
@@ -97,7 +157,9 @@ The gallery shows every item newest-first and auto-refreshes every ~20 s, so any
 ### 2. Add things to the pool
 - **Image** — tap **`+ 图片`** (Add image): pick from photos or camera. It's converted to JPEG and thumbnailed in your browser, then uploaded.
 - **Text** — tap **`✎ 文字`** (Text), paste/type a snippet, then **`发送`** (Send). It becomes a text card — a cross-device clipboard.
-- **File** — tap **`+ 文件`** (Add file): select a PDF, video, audio file, archive, document, or any other file. Its original name and MIME type are retained; each file is limited to 25 MB.
+- **File** — tap **`+ 文件`** (Add file): select a PDF, video, audio file, archive, document, or any other file. Its original name and MIME type are retained; each file is limited to 50 MB.
+- **Archive** — tap the **`归档`** (Archive) tab, then **`+ 归档`**: same kinds of files but up to 500 MB each, never auto-deleted. Large files upload directly from your browser to R2 (requires the [archive pool setup](#archive-pool-optional)). Small images also generate thumbnails.
+- **Promote** — anything in the transit pool can be kept: open it and tap **`转存归档`** (Promote to archive) to copy it into the archive pool; it stops counting toward the 30-day cleanup.
 - **Mac screenshots, automatically** — install the [Mac menu-bar app](mac/README.md): every screenshot uploads on its own.
 - **iOS share sheet** — set up the [Shortcut](shortcut/README.md) to push an image from any app's share sheet.
 
@@ -117,7 +179,7 @@ Tap any thumbnail/card to open it full-screen, then:
 
 - **Single shared token.** Anyone with the URL **and** token can view/upload/delete. This is a single-user / trusted-circle tool, not multi-tenant. Rotate with `npx wrangler secret put AUTH_TOKEN` — note this also invalidates all live share links, since the token is the link signing key.
 - **Share links are public** until they expire (7 days): anyone with the link can see that one item.
-- **Transit pool, not an archive.** Items auto-delete after 30 days by design.
+- **Two pools with different retention.** The transit pool auto-deletes after 30 days by design (via the lifecycle rule above); the archive pool is permanent and counts toward R2's 10 GB free allowance — the app warns before an upload would exceed it, but it can still cost money past that.
 - **The UI is currently in Chinese.** i18n PRs welcome.
 - The Worker stores received bytes as-is (no server-side image processing); format conversion and thumbnails happen on the client.
 
