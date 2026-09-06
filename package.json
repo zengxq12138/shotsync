@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "setup": "bash scripts/setup.sh",
     "test": "vitest run",
     "test:watch": "vitest"
   },

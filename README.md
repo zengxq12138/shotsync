@@ -62,28 +62,32 @@ The dividing line is **a live transfer vs. a pool that waits**. LocalSend and Pa
 
 Prereqs: a Cloudflare account, Node 18+, and **R2 enabled** (Dashboard → R2 → enable; Cloudflare asks for a card even on the free tier — the free allowance is not charged).
 
+Every setting lives in one `.env` file; one command applies all of it:
+
 ```bash
 git clone https://github.com/Defiabell/shotsync
 cd shotsync
 npm install
 npx wrangler login
 
-# 1. create the R2 bucket (name must match bucket_name in wrangler.toml)
-npx wrangler r2 bucket create shotsync
-
-# 2. set the shared access token — any long random string; you enter it on each device
-openssl rand -hex 24                  # generate one, copy it
-npx wrangler secret put AUTH_TOKEN    # paste it when prompted
-
-# 3. deploy
-npm run deploy
+cp .env.example .env   # then fill it in (see the table below)
+npm run setup          # bucket + CORS + secrets + deploy, in one go
 ```
 
-You also need a **workers.dev subdomain** (Dashboard → Workers & Pages, one-time) or a custom domain. After deploy you get `https://shotsync.<your-subdomain>.workers.dev`.
+| `.env` key | What it is |
+| --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | Your account ID (Dashboard right sidebar, or `npx wrangler whoami`). Optional if you fill in `R2_S3_ENDPOINT` yourself. |
+| `WORKER_ORIGIN` | Your Worker's public URL, e.g. `https://shotsync.<your-subdomain>.workers.dev` — used to lock the R2 CORS rule to your origin. You also need a **workers.dev subdomain** (Dashboard → Workers & Pages, one-time) or a custom domain. |
+| `AUTH_TOKEN` | The shared access token each device types in on first use. Leave empty and `npm run setup` generates one and saves it back to `.env`. |
+| `R2_BUCKET` | Bucket name; must match `bucket_name` in `wrangler.toml` (default `shotsync`). |
+| `R2_S3_ENDPOINT` | Per-bucket S3 endpoint; derived automatically from the account ID when empty — normally leave it empty. |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Optional — enables the [archive pool](#archive-pool-optional). |
+
+`npm run setup` is idempotent: change any value in `.env` and re-run it. On a fresh install it generates `AUTH_TOKEN` for you (and writes it back to `.env`), creates the bucket, applies a CORS rule scoped to your origin, sets the secrets, and deploys. The only thing it can't do from the CLI is the R2 lifecycle rules — one dashboard step, [below](#lifecycle-rules-transit-pool--staging).
 
 ### Lifecycle rules (transit pool + staging)
 
-The gallery itself does not delete anything — the transit pool's 30-day cleanup is an **R2 lifecycle rule**. With the archive pool, rules must be **prefix-scoped**; a whole-bucket rule would delete your archive too.
+The one setup step that must happen in the dashboard (wrangler can't manage lifecycle rules): the transit pool's 30-day cleanup is an **R2 lifecycle rule**. With the archive pool, rules must be **prefix-scoped**; a whole-bucket rule would delete your archive too.
 
 Dashboard → R2 → bucket `shotsync` → Settings → Object lifecycle rules. Create (or fix) these rules:
 
@@ -98,47 +102,23 @@ Dashboard → R2 → bucket `shotsync` → Settings → Object lifecycle rules. 
 
 ### Archive pool (optional)
 
-By default the app is transit-only. To enable the archive pool (permanent storage, 500 MB per file), you create an R2 API token and two more settings. Large files are uploaded **directly from the browser to R2** via a presigned URL, so the Worker never handles the bytes.
+By default the app is transit-only. To enable the archive pool (permanent storage, 500 MB per file), you create an R2 API token and add it to `.env`. Large files are uploaded **directly from the browser to R2** via a presigned URL, so the Worker never handles the bytes.
 
 1. **Create an R2 API token**: Dashboard → R2 → *Manage R2 API Tokens* → Create API Token → permission **Object Read & Write**, scoped to only the `shotsync` bucket. Copy the Access Key ID and Secret Access Key.
 
-2. **Set the secrets** and the S3 endpoint (shown as "S3 API" in the bucket's dashboard, of the form `https://<accountid>.r2.cloudflarestorage.com/shotsync` — include the bucket path):
+2. **Fill them into `.env`** and re-run setup:
 
    ```bash
-   npx wrangler secret put R2_ACCESS_KEY_ID      # paste Access Key ID
-   npx wrangler secret put R2_SECRET_ACCESS_KEY  # paste Secret Access Key
+   # .env
+   R2_ACCESS_KEY_ID=<access key id>
+   R2_SECRET_ACCESS_KEY=<secret access key>
    ```
-
-   and in `wrangler.toml` add (create a `[vars]` section if there isn't one):
-
-   ```toml
-   R2_S3_ENDPOINT = "https://<accountid>.r2.cloudflarestorage.com/shotsync"
-   ```
-
-3. **Allow the browser to PUT directly to R2** — one CORS rule on the bucket:
 
    ```bash
-   npx wrangler r2 bucket cors set shotsync --file cors.json
+   npm run setup
    ```
 
-   with `cors.json`:
-
-   ```json
-   {
-     "rules": [
-       {
-         "allowed": {
-           "origins": ["https://shotsync.<your-subdomain>.workers.dev"],
-           "methods": ["PUT"],
-           "headers": []
-         },
-         "maxAgeSeconds": 3600
-       }
-     ]
-   }
-   ```
-
-   Replace the origin with your real Worker URL (no `*` — uploads are authenticated by the signed URL only, but the origin should still be yours). Re-run `npm run deploy` after editing `wrangler.toml`.
+   That's it — the script derives the S3 endpoint from your account ID, applies the bucket CORS rule scoped to your `WORKER_ORIGIN` (in the exact format the R2 API expects — lowercase Cloudflare-API JSON, not S3-style PascalCase), and sets the secrets. The generated `cors.json` is left in the repo root if you want to inspect it.
 
 Notes:
 
@@ -181,7 +161,7 @@ Tap any thumbnail/card to open it full-screen, then:
 
 ## Security model & limitations (please read)
 
-- **Single shared token.** Anyone with the URL **and** token can view/upload/delete. This is a single-user / trusted-circle tool, not multi-tenant. Rotate with `npx wrangler secret put AUTH_TOKEN` — note this also invalidates all live share links, since the token is the link signing key.
+- **Single shared token.** Anyone with the URL **and** token can view/upload/delete. This is a single-user / trusted-circle tool, not multi-tenant. Rotate by changing `AUTH_TOKEN` in `.env` and re-running `npm run setup` — note this also invalidates all live share links, since the token is the link signing key.
 - **Share links are public** until they expire (7 days): anyone with the link can see that one item.
 - **Two pools with different retention.** The transit pool auto-deletes after 30 days by design (via the lifecycle rule above); the archive pool is permanent and counts toward R2's 10 GB free allowance — the app warns before an upload would exceed it, but it can still cost money past that.
 - **The UI is currently in Chinese.** i18n PRs welcome.
@@ -192,7 +172,7 @@ Tap any thumbnail/card to open it full-screen, then:
 ```bash
 npm test          # Vitest (workers pool) — full suite
 npx tsc --noEmit  # type-check
-npm run dev       # local dev — create a .dev.vars with AUTH_TOKEN=<anything>
+npm run dev       # local dev — `npm run setup` writes .dev.vars from your .env
 ```
 
 ## Community

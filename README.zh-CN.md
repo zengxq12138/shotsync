@@ -62,28 +62,32 @@ iCloud / AirDrop / 网盘 / 公开图床，要么手动、要么锁死在某个�
 
 前置：一个 Cloudflare 账户、Node 18+、并**启用 R2**（控制台 → R2 → 启用；即使免费档 Cloudflare 也会要求绑卡——免费额度内不扣费）。
 
+所有配置都集中在一个 `.env` 文件里，一条命令全部生效：
+
 ```bash
 git clone https://github.com/Defiabell/shotsync
 cd shotsync
 npm install
 npx wrangler login
 
-# 1. 建 R2 存储桶（名字要和 wrangler.toml 里的 bucket_name 一致）
-npx wrangler r2 bucket create shotsync
-
-# 2. 设置共享访问 token —— 任意长随机串；每台设备要输它
-openssl rand -hex 24                  # 生成一个，复制下来
-npx wrangler secret put AUTH_TOKEN    # 提示时粘贴
-
-# 3. 部署
-npm run deploy
+cp .env.example .env   # 填好它（各项含义见下表）
+npm run setup          # 建桶 + CORS + secrets + 部署，一步到位
 ```
 
-你还需要一个 **workers.dev 子域名**（控制台 → Workers & Pages，一次性）或自定义域名。部署后会得到 `https://shotsync.<你的子域>.workers.dev`。
+| `.env` 配置项 | 说明 |
+| --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | 账户 ID（控制台右侧栏，或 `npx wrangler whoami`）。如果自己填了 `R2_S3_ENDPOINT` 可不填。 |
+| `WORKER_ORIGIN` | 部署后的 Worker 地址，如 `https://shotsync.<你的子域>.workers.dev`——用于限定 R2 CORS 来源。还需要一个 **workers.dev 子域名**（控制台 → Workers & Pages，一次性）或自定义域名。 |
+| `AUTH_TOKEN` | 每台设备首次打开时输入的共享访问 token。留空则 `npm run setup` 自动生成并写回 `.env`。 |
+| `R2_BUCKET` | 桶名；须与 `wrangler.toml` 的 `bucket_name` 一致（默认 `shotsync`）。 |
+| `R2_S3_ENDPOINT` | 每桶 S3 端点；留空会由账户 ID 自动推导，一般不用填。 |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | 可选——填了才启用[归档池](#归档池可选)。 |
+
+`npm run setup` 可重复执行：改了 `.env` 里任何值，再跑一次即可。全新部署时它会自动生成 `AUTH_TOKEN`（并写回 `.env`）、建桶、按你的域名应用 CORS 规则、设置 secrets 并部署。唯一必须去控制台做的是 R2 生命周期规则，见[下文](#生命周期规则中转池--暂存区)。
 
 ### 生命周期规则（中转池 + 暂存区）
 
-相册本身不删任何东西——中转池的 30 天清理是靠 **R2 生命周期规则**实现的。有了归档池之后，规则必须**按前缀设置**；整桶规则会连归档一起删掉。
+唯一必须手动做的一步（wrangler 管不了生命周期规则）：相册本身不删任何东西——中转池的 30 天清理是靠 **R2 生命周期规则**实现的。有了归档池之后，规则必须**按前缀设置**；整桶规则会连归档一起删掉。
 
 控制台 → R2 → 桶 `shotsync` → Settings → Object lifecycle rules，建（或改）成下面这样：
 
@@ -98,47 +102,23 @@ npm run deploy
 
 ### 归档池（可选）
 
-默认部署只有中转池。要启用归档池（永久存储、单文件 500 MB），需要建一个 R2 API token 并加两条配置。大文件由**浏览器经预签名 URL 直传 R2**，不经过 Worker。
+默认部署只有中转池。要启用归档池（永久存储、单文件 500 MB），只需建一个 R2 API token 并填进 `.env`。大文件由**浏览器经预签名 URL 直传 R2**，不经过 Worker。
 
 1. **创建 R2 API token**：控制台 → R2 → *Manage R2 API Tokens* → Create API Token → 权限选 **Object Read & Write**、范围只勾 `shotsync` 这一个桶。记下 Access Key ID 和 Secret Access Key。
 
-2. **设置 secrets** 和 S3 端点（桶的仪表盘里叫 "S3 API"，形如 `https://<账户id>.r2.cloudflarestorage.com/shotsync`——要带桶路径）：
+2. **填进 `.env` 并重跑 setup**：
 
    ```bash
-   npx wrangler secret put R2_ACCESS_KEY_ID      # 粘贴 Access Key ID
-   npx wrangler secret put R2_SECRET_ACCESS_KEY  # 粘贴 Secret Access Key
+   # .env
+   R2_ACCESS_KEY_ID=<access key id>
+   R2_SECRET_ACCESS_KEY=<secret access key>
    ```
-
-   并在 `wrangler.toml` 里加（没有 `[vars]` 段就新建一个）：
-
-   ```toml
-   R2_S3_ENDPOINT = "https://<账户id>.r2.cloudflarestorage.com/shotsync"
-   ```
-
-3. **允许浏览器直传 R2** —— 给桶加一条 CORS 规则：
 
    ```bash
-   npx wrangler r2 bucket cors set shotsync --file cors.json
+   npm run setup
    ```
 
-   `cors.json` 内容（注意是 Cloudflare API 格式的小写 `allowed`，不是 S3 风格的 PascalCase）：
-
-   ```json
-   {
-     "rules": [
-       {
-         "allowed": {
-           "origins": ["https://shotsync.<你的子域>.workers.dev"],
-           "methods": ["PUT"],
-           "headers": []
-         },
-         "maxAgeSeconds": 3600
-       }
-     ]
-   }
-   ```
-
-   把 origin 换成你的真实 Worker 地址（不要用 `*`——上传本身由签名 URL 鉴权，但 origin 仍应限定为你自己的域名）。改完 `wrangler.toml` 后重新 `npm run deploy`。
+   就这一步——脚本会由账户 ID 自动推导 S3 端点、按你的 `WORKER_ORIGIN` 应用桶 CORS 规则（R2 API 要求的 Cloudflare 小写 JSON 格式，不是 S3 风格的 PascalCase——手写很容易踩坑）、并设置 secrets。生成的 `cors.json` 留在仓库根目录，想核对可以看。
 
 说明：
 
@@ -181,7 +161,7 @@ npm run deploy
 
 ## 安全模型与限制（请阅读）
 
-- **单一共享 token。** 拿到「地址 + token」的任何人都能看/传/删。这是单人 / 可信小圈子工具，不是多租户。用 `npx wrangler secret put AUTH_TOKEN` 轮换——注意这会同时让所有现存分享链接失效（token 也是链接的签名密钥）。
+- **单一共享 token。** 拿到「地址 + token」的任何人都能看/传/删。这是单人 / 可信小圈子工具，不是多租户。轮换：改 `.env` 里的 `AUTH_TOKEN` 后重跑 `npm run setup`——注意这会同时让所有现存分享链接失效（token 也是链接的签名密钥）。
 - **分享链接是公开的**，直到过期（7 天）：拿到链接的人都能看那一个 item。
 - **两个池子、留存策略不同。** 中转池按设计 30 天自动删除（靠上面的 lifecycle 规则）；归档池是永久的，占用 R2 免费 10 GB 存储额度——超出前应用会警告确认，但超过后仍可能产生费用。
 - **界面目前是中文。** 欢迎提 i18n PR。
@@ -192,7 +172,7 @@ npm run deploy
 ```bash
 npm test          # Vitest（workers pool）—— 全套
 npx tsc --noEmit  # 类型检查
-npm run dev       # 本地开发 —— 建一个含 AUTH_TOKEN=<任意串> 的 .dev.vars
+npm run dev       # 本地开发 —— npm run setup 会把 .env 同步成 .dev.vars
 ```
 
 ## 社区
