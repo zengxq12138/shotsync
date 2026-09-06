@@ -5,6 +5,13 @@ import { handleImage } from "./handlers/image";
 import { handleDelete } from "./handlers/del";
 import { handleShareCreate, handleSharedItem } from "./handlers/share";
 import { handleUsage } from "./handlers/usage";
+import {
+  handleArchiveAbort,
+  handleArchiveCommit,
+  handleArchiveInit,
+  handleArchiveThumb,
+  handlePromote,
+} from "./handlers/archive";
 import { galleryDemoHTML, galleryHTML } from "./gallery/page";
 import { manifestJSON } from "./gallery/manifest";
 import { swJS } from "./gallery/sw";
@@ -28,6 +35,22 @@ export default {
     }
     if (pathname === "/api/usage") {
       return m === "GET" ? handleUsage(request, env) : err(405, "method not allowed");
+    }
+    if (pathname === "/api/archive/init") {
+      return m === "POST" ? handleArchiveInit(request, env) : err(405, "method not allowed");
+    }
+    if (pathname === "/api/archive/commit") {
+      return m === "POST" ? handleArchiveCommit(request, env) : err(405, "method not allowed");
+    }
+    if (pathname === "/api/archive/abort") {
+      return m === "POST" ? handleArchiveAbort(request, env) : err(405, "method not allowed");
+    }
+    if (pathname === "/api/archive/thumb") {
+      return m === "POST" ? handleArchiveThumb(request, env) : err(405, "method not allowed");
+    }
+    if (pathname.startsWith("/api/promote/")) {
+      const id = decodeURIComponent(pathname.slice("/api/promote/".length));
+      return m === "POST" ? handlePromote(request, env, id) : err(405, "method not allowed");
     }
     if (pathname === "/api/upload") {
       return m === "POST" ? handleUpload(request, env) : err(405, "method not allowed");

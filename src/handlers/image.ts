@@ -1,6 +1,7 @@
 import { Env, err } from "../responses";
 import { canRead } from "../auth";
 import { FULL_EXTS, POOLS, fullKey, thumbKey } from "../ids";
+import { decodeMetaText } from "../metatext";
 
 const SAFE_IMAGE_TYPES = new Set([
   "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif",
@@ -16,7 +17,7 @@ export function responseHeaders(obj: R2ObjectBody, cacheControl: string): Header
   // Keep images and the app's text notes viewable. All other content is an
   // attachment, avoiding accidental in-browser execution of uploaded files.
   if (!SAFE_IMAGE_TYPES.has(contentType) && contentType !== "text/plain") {
-    const name = obj.customMetadata?.origName || "download";
+    const name = decodeMetaText(obj.customMetadata?.origName) || "download";
     headers.set("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
   }
   return headers;

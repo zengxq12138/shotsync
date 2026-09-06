@@ -1,6 +1,7 @@
 import { Env, err, json } from "../responses";
 import { canRead } from "../auth";
 import { Pool, epochMsFromId, fullPrefix, idFromFullKey } from "../ids";
+import { decodeMetaText } from "../metatext";
 // How many text previews one list call will read inline. Bounded on purpose: a
 // pool that is entirely text would otherwise turn a single list request into
 // `limit` object reads. Past this cap the client falls back to fetching the
@@ -43,7 +44,7 @@ export async function handleList(request: Request, env: Env): Promise<Response> 
       contentType: o.httpMetadata?.contentType || "application/octet-stream",
       hasThumb: o.customMetadata?.hasThumb === "true",
       source: o.customMetadata?.source || "unknown",
-      name: o.customMetadata?.origName || "",
+      name: decodeMetaText(o.customMetadata?.origName),
       size: o.size,
     };
   });
