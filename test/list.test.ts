@@ -11,7 +11,7 @@ declare global {
 
 async function seed(epochMs: number, hasThumb: string) {
   const id = makeId(epochMs, "aaaaaa".slice(0, 5) + (epochMs % 10));
-  await (env as Env).BUCKET.put(fullKey(id, "png"), new Uint8Array([1]), {
+  await (env as Env).BUCKET.put(fullKey("transit", id, "png"), new Uint8Array([1]), {
     httpMetadata: { contentType: "image/png" },
     customMetadata: { hasThumb, source: "mac", uploadedAt: "x", origName: "" },
   });
@@ -64,7 +64,7 @@ describe("handleList", () => {
 describe("handleList: inline text snippets", () => {
   async function seedText(epochMs: number, body: string) {
     const id = makeId(epochMs, "t" + (epochMs % 10000));
-    await (env as Env).BUCKET.put(fullKey(id, "txt"), new TextEncoder().encode(body), {
+    await (env as Env).BUCKET.put(fullKey("transit", id, "txt"), new TextEncoder().encode(body), {
       httpMetadata: { contentType: "text/plain" },
       customMetadata: { hasThumb: "false", source: "mac", uploadedAt: "x", origName: "" },
     });

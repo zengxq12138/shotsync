@@ -1,7 +1,6 @@
 import { Env, err, json } from "../responses";
 import { canRead } from "../auth";
 import { epochMsFromId, idFromFullKey } from "../ids";
-
 // How many text previews one list call will read inline. Bounded on purpose: a
 // pool that is entirely text would otherwise turn a single list request into
 // `limit` object reads. Past this cap the client falls back to fetching the
@@ -31,9 +30,10 @@ export async function handleList(request: Request, env: Env): Promise<Response> 
   } as R2ListOptions & { include: ("httpMetadata" | "customMetadata")[] });
 
   const items = res.objects.map((o) => {
-    const id = idFromFullKey(o.key);
+    const id = idFromFullKey("transit", o.key);
     return {
       id,
+      pool: "transit",
       key: o.key,
       time: epochMsFromId(id),
       contentType: o.httpMetadata?.contentType || "application/octet-stream",

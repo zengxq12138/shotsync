@@ -1,8 +1,6 @@
 import { Env, err, json } from "../responses";
 import { isAuthed } from "../auth";
-import { EXT_BY_TYPE, fullKey, makeId, randSuffix, thumbKey } from "../ids";
-
-const MAX_FULL_BYTES = 50 * 1024 * 1024;
+import { MAX_TRANSIT_BYTES, extForType, fullKey, makeId, normalizeMime, randSuffix, thumbKey } from "../ids";
 
 export async function handleUpload(request: Request, env: Env): Promise<Response> {
   if (!isAuthed(request, env)) return err(401, "unauthorized");
@@ -24,12 +22,12 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 
   // Normalize the MIME: strip any parameters like "; charset=utf-8" so a
   // non-PWA client (curl, Shortcut) isn't silently 415'd on text uploads.
-  const mimeType = full.type.split(";")[0].trim().toLowerCase() || "application/octet-stream";
+  const mimeType = normalizeMime(full.type) || "application/octet-stream";
   // Images and plain text keep their historic suffixes. Other content is kept
   // verbatim under a neutral suffix; MIME type and original filename are
   // stored as metadata and returned to the client for a proper download.
-  const ext = EXT_BY_TYPE[mimeType] || "bin";
-  if (full.size > MAX_FULL_BYTES) return err(413, "full too large");
+  const ext = extForType(mimeType);
+  if (full.size > MAX_TRANSIT_BYTES) return err(413, "full too large");
 
   const thumbEntry = form.get("thumb");
   const hasThumb = !!(thumbEntry && typeof thumbEntry === "object" && "stream" in thumbEntry && "name" in thumbEntry);
@@ -42,14 +40,14 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
     hasThumb: String(hasThumb),
   };
 
-  await env.BUCKET.put(fullKey(id, ext), full.stream(), {
+  await env.BUCKET.put(fullKey("transit", id, ext), full.stream(), {
     httpMetadata: { contentType: mimeType },
     customMetadata: meta,
   });
 
   if (hasThumb) {
     const thumb = thumbEntry as Blob;
-    await env.BUCKET.put(thumbKey(id), thumb.stream(), {
+    await env.BUCKET.put(thumbKey("transit", id), thumb.stream(), {
       httpMetadata: { contentType: "image/jpeg" },
     });
   }

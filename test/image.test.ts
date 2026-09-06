@@ -29,7 +29,7 @@ describe("handleImage", () => {
   });
 
   it("serves full with content-type + cache header", async () => {
-    await put(fullKey("ID", "png"), "image/png", [1, 2, 3]);
+    await put(fullKey("transit", "ID", "png"), "image/png", [1, 2, 3]);
     const res = await handleImage(req(), env as any, "ID");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
@@ -38,14 +38,14 @@ describe("handleImage", () => {
   });
 
   it("serves thumb when size=thumb and thumb exists", async () => {
-    await put(fullKey("ID", "png"), "image/png", [1, 2, 3]);
-    await put(thumbKey("ID"), "image/jpeg", [9, 9]);
+    await put(fullKey("transit", "ID", "png"), "image/png", [1, 2, 3]);
+    await put(thumbKey("transit", "ID"), "image/jpeg", [9, 9]);
     const res = await handleImage(req("thumb"), env as any, "ID");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([9, 9]));
   });
 
   it("falls back to full when size=thumb but no thumb", async () => {
-    await put(fullKey("ID", "jpg"), "image/jpeg", [7]);
+    await put(fullKey("transit", "ID", "jpg"), "image/jpeg", [7]);
     const res = await handleImage(req("thumb"), env as any, "ID");
     expect(res.status).toBe(200);
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([7]));

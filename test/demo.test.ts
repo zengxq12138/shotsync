@@ -19,7 +19,7 @@ function demoEnv(): Env {
 
 async function seedOne(): Promise<string> {
   const id = makeId(1000, "aaaa1");
-  await (env as Env).BUCKET.put(fullKey(id, "png"), new Uint8Array([1]), {
+  await (env as Env).BUCKET.put(fullKey("transit", id, "png"), new Uint8Array([1]), {
     httpMetadata: { contentType: "image/png" },
     customMetadata: { hasThumb: "false", source: "mac", uploadedAt: "x", origName: "" },
   });

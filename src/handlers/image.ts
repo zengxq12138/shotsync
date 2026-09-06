@@ -1,6 +1,6 @@
 import { Env, err } from "../responses";
 import { canRead } from "../auth";
-import { FULL_EXTS, thumbKey } from "../ids";
+import { FULL_EXTS, POOLS, fullKey, thumbKey } from "../ids";
 
 const SAFE_IMAGE_TYPES = new Set([
   "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif",
@@ -22,10 +22,23 @@ export function responseHeaders(obj: R2ObjectBody, cacheControl: string): Header
   return headers;
 }
 
-// Try to find full image with one of the supported extensions
+// Try to find a full object with one of the supported extensions, probing the
+// transit pool first. Probing both pools is what keeps /i/ and /s/ links
+// working after an item is promoted from transit to archive — the id never
+// changes, only its prefix.
 export async function getFull(env: Env, id: string): Promise<R2ObjectBody | null> {
-  for (const ext of FULL_EXTS) {
-    const obj = await env.BUCKET.get(`full/${id}.${ext}`);
+  for (const pool of POOLS) {
+    for (const ext of FULL_EXTS) {
+      const obj = await env.BUCKET.get(fullKey(pool, id, ext));
+      if (obj) return obj;
+    }
+  }
+  return null;
+}
+
+async function getThumb(env: Env, id: string): Promise<R2ObjectBody | null> {
+  for (const pool of POOLS) {
+    const obj = await env.BUCKET.get(thumbKey(pool, id));
     if (obj) return obj;
   }
   return null;
@@ -41,7 +54,7 @@ export async function handleImage(request: Request, env: Env, id: string): Promi
   let obj: R2ObjectBody | null = null;
 
   // If size=thumb is requested, try to fetch thumb
-  if (size === "thumb") obj = await env.BUCKET.get(thumbKey(id));
+  if (size === "thumb") obj = await getThumb(env, id);
 
   // Fall back to full image if thumb not found or not requested
   if (!obj) obj = await getFull(env, id);
