@@ -2,7 +2,7 @@ import { Env, err, json } from "../responses";
 import { isAuthed } from "../auth";
 import { EXT_BY_TYPE, fullKey, makeId, randSuffix, thumbKey } from "../ids";
 
-const MAX_FULL_BYTES = 25 * 1024 * 1024;
+const MAX_FULL_BYTES = 50 * 1024 * 1024;
 
 export async function handleUpload(request: Request, env: Env): Promise<Response> {
   if (!isAuthed(request, env)) return err(401, "unauthorized");
