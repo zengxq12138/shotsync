@@ -1,6 +1,6 @@
 import { Env, err, json } from "../responses";
 import { canRead } from "../auth";
-import { epochMsFromId, idFromFullKey } from "../ids";
+import { Pool, epochMsFromId, fullPrefix, idFromFullKey } from "../ids";
 // How many text previews one list call will read inline. Bounded on purpose: a
 // pool that is entirely text would otherwise turn a single list request into
 // `limit` object reads. Past this cap the client falls back to fetching the
@@ -18,22 +18,26 @@ export async function handleList(request: Request, env: Env): Promise<Response> 
   const url = new URL(request.url);
   const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 100);
   const cursor = url.searchParams.get("cursor") || undefined;
+  // `pool` defaults to transit so the mac app, iOS Shortcut and any client
+  // predating the archive pool keep seeing exactly what they saw before.
+  const poolParam = url.searchParams.get("pool");
+  const pool: Pool = poolParam === "archive" ? "archive" : "transit";
 
   // `include` is missing from R2ListOptions in @cloudflare/workers-types ^4.0.0,
   // so assert the options to an extended type. The arg stays assignable to
   // R2ListOptions, so the R2Objects return type is preserved (unlike `as any`).
   const res = await env.BUCKET.list({
-    prefix: "full/",
+    prefix: fullPrefix(pool),
     limit,
     cursor,
     include: ["customMetadata", "httpMetadata"],
   } as R2ListOptions & { include: ("httpMetadata" | "customMetadata")[] });
 
   const items = res.objects.map((o) => {
-    const id = idFromFullKey("transit", o.key);
+    const id = idFromFullKey(pool, o.key);
     return {
       id,
-      pool: "transit",
+      pool,
       key: o.key,
       time: epochMsFromId(id),
       contentType: o.httpMetadata?.contentType || "application/octet-stream",

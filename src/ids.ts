@@ -63,6 +63,19 @@ export function thumbKey(pool: Pool, id: string): string {
   return `${THUMB_PREFIX[pool]}${id}.jpg`;
 }
 
+// List-time prefixes (what BUCKET.list / usage accounting walk).
+export function fullPrefix(pool: Pool): string {
+  return FULL_PREFIX[pool];
+}
+
+export function thumbPrefix(pool: Pool): string {
+  return THUMB_PREFIX[pool];
+}
+
+export function inboxPrefix(): string {
+  return INBOX_PREFIX;
+}
+
 export function inboxKey(id: string): string {
   return `${INBOX_PREFIX}${id}`;
 }

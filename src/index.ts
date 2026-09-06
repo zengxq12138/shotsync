@@ -4,6 +4,7 @@ import { handleList } from "./handlers/list";
 import { handleImage } from "./handlers/image";
 import { handleDelete } from "./handlers/del";
 import { handleShareCreate, handleSharedItem } from "./handlers/share";
+import { handleUsage } from "./handlers/usage";
 import { galleryDemoHTML, galleryHTML } from "./gallery/page";
 import { manifestJSON } from "./gallery/manifest";
 import { swJS } from "./gallery/sw";
@@ -24,6 +25,9 @@ export default {
     }
     if (pathname === "/sw.js" && m === "GET") {
       return new Response(swJS, { headers: { "content-type": "text/javascript" } });
+    }
+    if (pathname === "/api/usage") {
+      return m === "GET" ? handleUsage(request, env) : err(405, "method not allowed");
     }
     if (pathname === "/api/upload") {
       return m === "POST" ? handleUpload(request, env) : err(405, "method not allowed");

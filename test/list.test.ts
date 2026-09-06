@@ -55,6 +55,34 @@ describe("handleList", () => {
     expect(body.items.length).toBe(2);
     expect(body.cursor).toBeTruthy();
   });
+
+  it("tags items with pool=transit by default (mac app / Shortcut compat)", async () => {
+    await seed(1000, "false");
+    const body = await (await handleList(listReq(), env as Env)).json<{ items: any[] }>();
+    expect(body.items[0].pool).toBe("transit");
+  });
+
+  it("pool=archive lists only archive fulls", async () => {
+    const archiveId = makeId(1_700_000_000_000, "archiv");
+    await (env as Env).BUCKET.put(fullKey("archive", archiveId, "bin"), new Uint8Array([1]), {
+      httpMetadata: { contentType: "application/zip" },
+      customMetadata: { hasThumb: "false", source: "pwa-archive", uploadedAt: "x", origName: "doc.zip" },
+    });
+    await seed(1000, "false"); // a transit item that must NOT appear
+
+    // default listing stays transit-only
+    const transit = await (await handleList(listReq(), env as Env)).json<{ items: any[] }>();
+    expect(transit.items.map((i) => i.id)).not.toContain(archiveId);
+    expect(transit.items.length).toBe(1);
+
+    const archive = await (await handleList(listReq("?pool=archive"), env as Env)).json<{
+      items: any[]; cursor: string | null;
+    }>();
+    expect(archive.items.length).toBe(1);
+    expect(archive.items[0].id).toBe(archiveId);
+    expect(archive.items[0].pool).toBe("archive");
+    expect(archive.items[0].name).toBe("doc.zip");
+  });
 });
 
 // The gallery used to render every text card as "…" and then fetch each one
