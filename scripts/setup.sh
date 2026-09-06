@@ -32,7 +32,14 @@ case "$WORKER_ORIGIN" in https://*) ;; *) die "WORKER_ORIGIN must start with htt
 
 # ── bucket + CORS ───────────────────────────────────────────────────
 say "Ensuring R2 bucket '$R2_BUCKET' exists"
-$WRANGLER r2 bucket create "$R2_BUCKET" >/dev/null 2>&1 || echo "  (already exists — ok)"
+if ! out="$($WRANGLER r2 bucket create "$R2_BUCKET" 2>&1)"; then
+  # Only "already exists" is tolerable — a network/auth failure must be loud.
+  echo "$out" | grep -qi "already exists" \
+    || { printf '%s\n' "$out" >&2; die "creating R2 bucket '$R2_BUCKET'"; }
+  echo "  (already exists — ok)"
+else
+  echo "  created ✓"
+fi
 
 say "Applying bucket CORS for $WORKER_ORIGIN"
 cat > cors.json <<EOF
